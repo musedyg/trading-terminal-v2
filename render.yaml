@@ -1,0 +1,13 @@
+# Render 部署配置（trading-terminal-v2）
+# 用法：把本项目推到 GitHub，在 Render 选 "New +" → "Blueprint" → 选仓库即可
+services:
+  - type: web
+    name: trading-terminal-v2
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start -- --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
