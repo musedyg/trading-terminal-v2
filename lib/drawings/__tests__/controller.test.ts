@@ -21,6 +21,9 @@ const attached: { attached: (p: unknown) => void; detached: () => void }[] = [];
 const mockSeries: Record<string, unknown> = {
   priceToCoordinate: (p: number): number | null => yOf(p),
   coordinateToPrice: (y: number): number | null => (1000 - y) / 4,
+  // toolkit PluginBase 挂载时订阅数据变更（真实 ISeriesApi 本就有此方法，mock 补空实现）
+  subscribeDataChanged: () => {},
+  unsubscribeDataChanged: () => {},
   attachPrimitive: (p: { attached: (arg: unknown) => void }) => {
     attached.push(p as never);
     p.attached({ chart: mockChart, series: mockSeries, requestUpdate: () => {} });

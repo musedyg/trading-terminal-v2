@@ -4,18 +4,30 @@
  * 纯渲染层：零 DOM、零 React，只依赖 lightweight-charts 类型 + ./types.ts + ./geometry.ts。
  * 所有坐标换算只走 x()/y()（跟随图表缩放 / 平移），从不自己算像素偏移。
  * autoscaleInfo() 恒返回 null：画线不参与自动缩放。
+ *
+ * 2026-10 浮层优化（官方 @tradingview/lwc-toolkit）：
+ * - 基类换 toolkit PluginBase：挂载/卸载、chart/series 引用与 requestUpdate 管道走官方实现；
+ *   本类只保留可空镜像引用做防御（渲染/命中在未挂载时安全早退）。
+ * - 轴向直线与矩形边用 toolkit positionsLine/positionsBox 做位图像素对齐（见 lib/chart/pixel-snap），
+ *   高分屏上不再发虚；圆角 pill 改用 toolkit drawRoundRect。
+ * - update() 的重绘请求经帧合并（lib/scheduling/coalesced-task），拖拽时每帧最多刷新一次。
+ * - draw() 前做可见范围裁剪：锚点时间全部落在可视区间之外的画线整幅跳过（hline 除外）。
+ *   命中判定仍走 geometry.ts 的距离算法（toolkit 的 canvas/markers 未随 1.0.0 发布）。
  */
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import type {
   IChartApiBase,
   IPrimitivePaneView,
   ISeriesApi,
-  ISeriesPrimitive,
   PrimitiveHoveredItem,
   SeriesAttachedParameter,
   SeriesType,
   Time,
 } from 'lightweight-charts';
+import { PluginBase } from '@tradingview/lwc-toolkit/plugin-base';
+import { drawRoundRect } from '@tradingview/lwc-toolkit/canvas/round-rect';
+import { snapLineCenter, snapSpan } from '../chart/pixel-snap.ts';
+import { createCoalescedTask } from '../scheduling/coalesced-task.ts';
 import { FIBO_RATIOS } from './types.ts';
 import type { DrawingModel } from './types.ts';
 import {
@@ -130,17 +142,11 @@ function estimateTextWidth(text: string, fontSize: number): number {
   return w;
 }
 
-/** 圆角 pill 底 */
+/** 圆角 pill 底（toolkit drawRoundRect 构建路径后填充） */
 function drawPill(ctx: Ctx, x: number, y: number, w: number, h: number, fill: string): void {
   const r = Math.min(h / 2, 8);
+  drawRoundRect(ctx, x, y, w, h, [r, r, r, r]);
   ctx.fillStyle = fill;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
   ctx.fill();
 }
 
@@ -155,18 +161,24 @@ export interface DrawingPrimitiveOptions {
   preview?: boolean;
 }
 
-export class DrawingPrimitive implements ISeriesPrimitive<Time> {
+export class DrawingPrimitive extends PluginBase {
   private model: DrawingModel;
   private selected: boolean;
   private precision: number;
   private preview: boolean;
-  private chart?: IChartApiBase<Time>;
-  private series?: ISeriesApi<SeriesType, Time>;
-  private requestUpdate?: () => void;
+  /** PluginBase 的 chart/series getter 在未挂载时抛错，渲染/命中用可空镜像做防御 */
+  private chartRef?: IChartApiBase<Time>;
+  private seriesRef?: ISeriesApi<SeriesType, Time>;
+  /** 当前帧的像素比（renderAll 写入，像素对齐用） */
+  private hpr = 1;
+  private vpr = 1;
   private readonly paneView: IPrimitivePaneView;
   private readonly paneViewList: IPrimitivePaneView[];
+  /** update() 的重绘请求帧合并：拖拽高频更新时每帧最多真正 requestUpdate 一次 */
+  private readonly updateCoalescer = createCoalescedTask(() => this.requestUpdate());
 
   constructor(model: DrawingModel, opts: DrawingPrimitiveOptions) {
+    super();
     this.model = model;
     this.selected = opts.selected;
     this.precision = opts.precision;
@@ -182,19 +194,20 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
   update(model: DrawingModel, selected: boolean): void {
     this.model = model;
     this.selected = selected;
-    this.requestUpdate?.();
+    this.updateCoalescer.schedule();
   }
 
-  attached(param: SeriesAttachedParameter<Time, SeriesType>): void {
-    this.chart = param.chart;
-    this.series = param.series;
-    this.requestUpdate = param.requestUpdate;
+  override attached(param: SeriesAttachedParameter<Time>): void {
+    super.attached(param);
+    this.chartRef = param.chart;
+    this.seriesRef = param.series as ISeriesApi<SeriesType, Time>;
   }
 
-  detached(): void {
-    this.chart = undefined;
-    this.series = undefined;
-    this.requestUpdate = undefined;
+  override detached(): void {
+    this.updateCoalescer.cancel();
+    super.detached();
+    this.chartRef = undefined;
+    this.seriesRef = undefined;
   }
 
   paneViews(): IPrimitivePaneView[] {
@@ -219,21 +232,21 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
   // ---------- 坐标换算 ----------
 
   private x(time: number): number | null {
-    if (!this.chart) return null;
-    return this.chart.timeScale().timeToCoordinate(time as Time);
+    if (!this.chartRef) return null;
+    return this.chartRef.timeScale().timeToCoordinate(time as Time);
   }
 
   private y(price: number): number | null {
-    if (!this.series) return null;
-    return this.series.priceToCoordinate(price);
+    if (!this.seriesRef) return null;
+    return this.seriesRef.priceToCoordinate(price);
   }
 
   private paneWidth(): number {
-    return this.chart ? this.chart.chartElement().clientWidth : 0;
+    return this.chartRef ? this.chartRef.chartElement().clientWidth : 0;
   }
 
   private paneHeight(): number {
-    return this.chart ? this.chart.chartElement().clientHeight : 0;
+    return this.chartRef ? this.chartRef.chartElement().clientHeight : 0;
   }
 
   /** model.points[i] → 像素，任一坐标为 null 则返回 null */
@@ -250,10 +263,39 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
     return this.selected && !this.preview;
   }
 
+  /**
+   * 可见范围裁剪：所有锚点时间都落在可视区间之外时整幅跳过。
+   * hline 只由价格决定、与时间无关，恒不裁剪；拿不到可见范围时不裁剪（保守绘制）。
+   */
+  private isOutsideVisibleRange(): boolean {
+    if (this.model.tool === 'hline') return false;
+    const ts = this.chartRef?.timeScale();
+    if (!ts || typeof ts.getVisibleRange !== 'function') return false;
+    const range = ts.getVisibleRange();
+    if (!range) return false;
+    const from = Number(range.from);
+    const to = Number(range.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const p of this.model.points) {
+      if (p.time < min) min = p.time;
+      if (p.time > max) max = p.time;
+    }
+    return max < from || min > to;
+  }
+
+  /** 水平线 y 像素对齐（toolkit positionsLine） */
+  private snapY(y: number, lineWidth: number): number {
+    return snapLineCenter(y, this.vpr, lineWidth);
+  }
+
   // ---------- 渲染入口 ----------
 
   private renderAll(target: CanvasRenderingTarget2D): void {
     target.useBitmapCoordinateSpace(({ context, horizontalPixelRatio, verticalPixelRatio }) => {
+      this.hpr = horizontalPixelRatio;
+      this.vpr = verticalPixelRatio;
       context.save();
       context.scale(horizontalPixelRatio, verticalPixelRatio);
       this.draw(context);
@@ -262,6 +304,7 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
   }
 
   private draw(ctx: Ctx): void {
+    if (this.isOutsideVisibleRange()) return;
     switch (this.model.tool) {
       case 'trend':
         this.drawTrend(ctx);
@@ -323,9 +366,10 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
   private drawHLine(ctx: Ctx): void {
     const p = this.model.points[0];
     if (!p) return;
-    const lineY = this.y(p.price);
-    if (lineY === null) return;
+    const rawY = this.y(p.price);
+    if (rawY === null) return;
     const s = this.model.style;
+    const lineY = this.snapY(rawY, s.lineWidth);
     const w = this.paneWidth();
     strokeLine(ctx, 0, lineY, w, lineY, s.color, s.lineWidth, s.dashed ?? false);
   }
@@ -335,16 +379,15 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
     const b = this.px(1);
     if (!a || !b) return;
     const s = this.model.style;
-    const x = Math.min(a.x, b.x);
-    const y = Math.min(a.y, b.y);
-    const w = Math.abs(b.x - a.x);
-    const h = Math.abs(b.y - a.y);
+    // 矩形四边像素对齐（toolkit positionsBox）：填充与描边共用同一组对齐坐标
+    const xs = snapSpan(a.x, b.x, this.hpr);
+    const ys = snapSpan(a.y, b.y, this.vpr);
     ctx.fillStyle = hexToRgba(s.color, s.fillOpacity ?? 0.12);
-    ctx.fillRect(x, y, w, h);
+    ctx.fillRect(xs.start, ys.start, xs.length, ys.length);
     ctx.strokeStyle = s.color;
     ctx.lineWidth = s.lineWidth;
     ctx.setLineDash(s.dashed ? [...DASH_PATTERN] : []);
-    ctx.strokeRect(x, y, w, h);
+    ctx.strokeRect(xs.start, ys.start, xs.length, ys.length);
     ctx.setLineDash([]);
     if (this.showHandles()) {
       drawHandle(ctx, a.x, a.y, s.color);
@@ -374,8 +417,9 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
     ctx.textAlign = 'left';
     for (let i = 0; i < levels.length; i++) {
       const level = levels[i];
-      const ly = this.y(level.price);
-      if (ly === null) return;
+      const rawLy = this.y(level.price);
+      if (rawLy === null) return;
+      const ly = this.snapY(rawLy, s.lineWidth);
       const color = FIBO_COLORS[i] ?? s.color;
       strokeLine(ctx, x0, ly, x1 + 70, ly, color, s.lineWidth, false);
       ctx.font = `11px ${FONT_STACK}`;
@@ -427,18 +471,23 @@ export class DrawingPrimitive implements ISeriesPrimitive<Time> {
     const tp = pts[2];
     const x0 = this.x(Math.min(entry.time, sl.time, tp.time));
     const x1 = this.x(Math.max(entry.time, sl.time, tp.time));
-    const entryY = this.y(entry.price);
-    const slY = this.y(sl.price);
-    const tpY = this.y(tp.price);
-    if (x0 === null || x1 === null || entryY === null || slY === null || tpY === null) return;
+    const rawEntryY = this.y(entry.price);
+    const rawSlY = this.y(sl.price);
+    const rawTpY = this.y(tp.price);
+    if (x0 === null || x1 === null || rawEntryY === null || rawSlY === null || rawTpY === null) return;
     const s = this.model.style;
     const w = this.paneWidth();
+    // 三条全宽线像素对齐；盈亏填充共用对齐后的 y，保证填充边缘与线重合
+    const entryY = this.snapY(rawEntryY, s.lineWidth);
+    const slY = this.snapY(rawSlY, s.lineWidth);
+    const tpY = this.snapY(rawTpY, s.lineWidth);
+    const xs = snapSpan(x0, x1, this.hpr);
 
     // 盈亏区间填充（x0 → x1）
     ctx.fillStyle = hexToRgba(PROFIT_FILL_COLOR, 0.12);
-    ctx.fillRect(x0, Math.min(entryY, tpY), x1 - x0, Math.abs(tpY - entryY));
+    ctx.fillRect(xs.start, Math.min(entryY, tpY), xs.length, Math.abs(tpY - entryY));
     ctx.fillStyle = hexToRgba(SL_COLOR, 0.12);
-    ctx.fillRect(x0, Math.min(entryY, slY), x1 - x0, Math.abs(slY - entryY));
+    ctx.fillRect(xs.start, Math.min(entryY, slY), xs.length, Math.abs(slY - entryY));
 
     // 三条全宽线：入场白虚线 / 止损红 / 目标绿
     strokeLine(ctx, 0, entryY, w, entryY, ENTRY_LINE_COLOR, s.lineWidth, true);

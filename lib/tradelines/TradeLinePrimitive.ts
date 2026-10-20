@@ -2,45 +2,61 @@
  * TP/SL/挂单线的 Series Primitive 画布渲染器（lightweight-charts v5）。
  *
  * 纯渲染层：零 DOM、零 React，只依赖 lightweight-charts 类型 + ./types.ts。
- * - 全宽水平线 + 右侧价格标签（TP 绿 / SL 红 / 挂单 蓝虚线）
+ * - 全宽水平线 + 价格轴标签（TP 绿 / SL 红 / 挂单 蓝虚线）
  * - 所有坐标只走 priceToCoordinate，跟随缩放 / 平移
  * - autoscaleInfo() 恒返回 null：不参与自动缩放
  * - hitTest() 恒返回 null：不参与图表命中判定（避免干扰 M2 画线控制器），
  *   拖拽命中由 TradeLinesLayer 用 priceToCoordinate 距离判定
+ *
+ * 2026-10 浮层优化（官方 @tradingview/lwc-toolkit）：
+ * - 基类换 toolkit PluginBase（同画线层）；update() 重绘请求帧合并。
+ * - 价格标签从窗格内手绘 pill 改为 priceAxisViews() + toolkit AxisLabelView：
+ *   标签由图表库原生渲染在价格轴上，与最新价标签同款式、同布局，不再压图。
+ * - 水平线用 toolkit positionsLine 做位图像素对齐（见 lib/chart/pixel-snap）。
  */
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import type {
+  Coordinate,
   IChartApiBase,
   IPrimitivePaneView,
   ISeriesApi,
-  ISeriesPrimitive,
+  ISeriesPrimitiveAxisView,
   PrimitiveHoveredItem,
   SeriesAttachedParameter,
   SeriesType,
   Time,
 } from 'lightweight-charts';
+import { PluginBase } from '@tradingview/lwc-toolkit/plugin-base';
+import { AxisLabelView, type AxisLabelSource } from '@tradingview/lwc-toolkit/axis-label-view';
+import { snapLineCenter } from '../chart/pixel-snap.ts';
+import { createCoalescedTask } from '../scheduling/coalesced-task.ts';
 import { TRADELINE_META, type TradeLineModel } from './types.ts';
 
 /** 虚线样式 */
 const DASH_PATTERN: readonly number[] = [6, 4];
-
-const FONT_STACK =
-  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif";
+/** 线宽（像素） */
+const LINE_WIDTH = 1.5;
 
 export interface TradeLinePrimitiveOptions {
   precision: number;
 }
 
-export class TradeLinePrimitive implements ISeriesPrimitive<Time> {
+export class TradeLinePrimitive extends PluginBase {
   private model: TradeLineModel;
   private precision: number;
-  private chart?: IChartApiBase<Time>;
-  private series?: ISeriesApi<SeriesType, Time>;
-  private requestUpdate?: () => void;
+  /** PluginBase 的 chart/series getter 在未挂载时抛错，渲染用可空镜像做防御 */
+  private chartRef?: IChartApiBase<Time>;
+  private seriesRef?: ISeriesApi<SeriesType, Time>;
+  private vpr = 1;
   private readonly paneView: IPrimitivePaneView;
   private readonly paneViewList: IPrimitivePaneView[];
+  private readonly axisView: AxisLabelView;
+  private readonly axisViewList: ISeriesPrimitiveAxisView[];
+  /** update() 的重绘请求帧合并：拖拽改价时每帧最多真正 requestUpdate 一次 */
+  private readonly updateCoalescer = createCoalescedTask(() => this.requestUpdate());
 
   constructor(model: TradeLineModel, opts: TradeLinePrimitiveOptions) {
+    super();
     this.model = model;
     this.precision = opts.precision;
     this.paneView = {
@@ -49,28 +65,47 @@ export class TradeLinePrimitive implements ISeriesPrimitive<Time> {
       }),
     };
     this.paneViewList = [this.paneView];
+    // 价格轴标签数据源：每次读取都取当前 model/precision，天然与状态同步
+    const source: AxisLabelSource = {
+      coordinate: () => {
+        if (!this.seriesRef) return null;
+        return this.seriesRef.priceToCoordinate(this.model.price) as Coordinate | null;
+      },
+      text: () =>
+        `${TRADELINE_META[this.model.kind].label} ${this.model.price.toFixed(this.precision)}`,
+      backColor: () => TRADELINE_META[this.model.kind].color,
+      textColor: () => '#ffffff',
+    };
+    this.axisView = new AxisLabelView(source);
+    this.axisViewList = [this.axisView];
   }
 
   update(model: TradeLineModel, precision: number): void {
     this.model = model;
     this.precision = precision;
-    this.requestUpdate?.();
+    this.updateCoalescer.schedule();
   }
 
-  attached(param: SeriesAttachedParameter<Time, SeriesType>): void {
-    this.chart = param.chart;
-    this.series = param.series;
-    this.requestUpdate = param.requestUpdate;
+  override attached(param: SeriesAttachedParameter<Time>): void {
+    super.attached(param);
+    this.chartRef = param.chart;
+    this.seriesRef = param.series as ISeriesApi<SeriesType, Time>;
   }
 
-  detached(): void {
-    this.chart = undefined;
-    this.series = undefined;
-    this.requestUpdate = undefined;
+  override detached(): void {
+    this.updateCoalescer.cancel();
+    super.detached();
+    this.chartRef = undefined;
+    this.seriesRef = undefined;
   }
 
   paneViews(): IPrimitivePaneView[] {
     return this.paneViewList;
+  }
+
+  /** 价格轴标签：由图表库在价格轴上原生绘制（替代原窗格内手绘 pill） */
+  priceAxisViews(): ISeriesPrimitiveAxisView[] {
+    return this.axisViewList;
   }
 
   autoscaleInfo(): null {
@@ -84,6 +119,7 @@ export class TradeLinePrimitive implements ISeriesPrimitive<Time> {
 
   private renderAll(target: CanvasRenderingTarget2D): void {
     target.useBitmapCoordinateSpace(({ context, horizontalPixelRatio, verticalPixelRatio }) => {
+      this.vpr = verticalPixelRatio;
       context.save();
       context.scale(horizontalPixelRatio, verticalPixelRatio);
       this.draw(context);
@@ -92,45 +128,20 @@ export class TradeLinePrimitive implements ISeriesPrimitive<Time> {
   }
 
   private draw(ctx: CanvasRenderingContext2D): void {
-    if (!this.chart || !this.series) return;
-    const y = this.series.priceToCoordinate(this.model.price);
-    if (y === null) return;
+    if (!this.chartRef || !this.seriesRef) return;
+    const rawY = this.seriesRef.priceToCoordinate(this.model.price);
+    if (rawY === null) return;
     const meta = TRADELINE_META[this.model.kind];
-    const w = this.chart.chartElement().clientWidth;
-
-    // 全宽水平线
+    const w = this.chartRef.chartElement().clientWidth;
+    // 全宽水平线（位图像素对齐，高分屏不发虚）；标签已移交价格轴 priceAxisViews
+    const y = snapLineCenter(rawY, this.vpr, LINE_WIDTH);
     ctx.strokeStyle = meta.color;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = LINE_WIDTH;
     ctx.setLineDash(meta.dashed ? [...DASH_PATTERN] : []);
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(w, y);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    // 右侧价格标签：种类 + 价格
-    const fontSize = 11;
-    ctx.font = `${fontSize}px ${FONT_STACK}`;
-    const text = `${meta.label} ${this.model.price.toFixed(this.precision)}`;
-    const tw = ctx.measureText(text).width;
-    const padX = 6;
-    const pillW = tw + padX * 2;
-    const pillH = 18;
-    const pillX = w - pillW - 4;
-    const pillY = y - pillH / 2;
-    const r = 4;
-    ctx.fillStyle = meta.color;
-    ctx.beginPath();
-    ctx.moveTo(pillX + r, pillY);
-    ctx.arcTo(pillX + pillW, pillY, pillX + pillW, pillY + pillH, r);
-    ctx.arcTo(pillX + pillW, pillY + pillH, pillX, pillY + pillH, r);
-    ctx.arcTo(pillX, pillY + pillH, pillX, pillY, r);
-    ctx.arcTo(pillX, pillY, pillX + pillW, pillY, r);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillText(text, pillX + padX, y + 0.5);
   }
 }

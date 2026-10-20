@@ -3,7 +3,7 @@
 // 主页面（M3 阶段 A）：深色看盘布局 + 多图分屏 + 命名布局。
 // 顶栏（分屏切换 + 十字同步 + 布局菜单 + 指标占位）→ 左侧画线工具栏 → 多图网格 → Footer。
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ChartGrid from '@/components/chart/ChartGrid';
 import LayoutMenu from '@/components/layout/LayoutMenu';
 import PinePanel from '@/components/pine/PinePanel';
@@ -18,7 +18,7 @@ import {
 } from '@/lib/alerts/types';
 import { playAlertSound } from '@/lib/alerts/sound';
 import { precisionForPrice } from '@/lib/format';
-import type { PineOverlay } from '@/components/chart/PriceChart';
+import type { BrushRange, PineOverlay } from '@/components/chart/PriceChart';
 import {
   PANE_COUNTS,
   defaultPanes,
@@ -59,6 +59,9 @@ export default function Home() {
   // M3 阶段 B：Pine 面板
   const [pineOpen, setPineOpen] = useState<boolean>(false);
   const [pineOverlays, setPineOverlays] = useState<PineOverlay[]>([]);
+  // 浮层优化：刷选回测区间（活动窗格图表上拖动刷选，喂给 Pine 运行/回测）
+  const [brushMode, setBrushMode] = useState<boolean>(false);
+  const [brushRange, setBrushRange] = useState<BrushRange | null>(null);
   // M3 阶段 C：预警 + 模拟交易
   const [alertOpen, setAlertOpen] = useState<boolean>(false);
   const [tradeOpen, setTradeOpen] = useState<boolean>(false);
@@ -146,8 +149,29 @@ export default function Home() {
   const activeKey = `${activePane?.symbolId ?? ''}::${activePane?.timeframe ?? ''}`;
   useEffect(() => {
     setPineOverlays([]);
+    setBrushRange(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey]);
+
+  // 浮层优化：已触发预警 → 事件竖线（各窗格按品种过滤后画在触发时刻）
+  const eventLines = useMemo(
+    () =>
+      alerts
+        .filter((a) => a.triggeredAt !== null)
+        .map((a) => ({
+          id: a.id,
+          symbolId: a.symbolId,
+          time: Math.floor((a.triggeredAt as number) / 1000),
+          text: strings.alertEventLine,
+        })),
+    [alerts],
+  );
+
+  // 浮层优化：刷选区间回调（选出区间后自动打开 Pine 面板承接回测）
+  const handleBrushRange = useCallback((range: BrushRange | null) => {
+    setBrushRange(range);
+    if (range) setPineOpen(true);
+  }, []);
 
   // M3 阶段 C：预警 store 变更 → 刷新列表 + 持久化
   useEffect(() => {
@@ -283,6 +307,19 @@ export default function Home() {
           {strings.indicators}
         </button>
 
+        {/* 刷选回测区间（浮层优化） */}
+        <button
+          onClick={() => setBrushMode((v) => !v)}
+          title={strings.brushHint}
+          className={`h-8 px-3 rounded text-sm border ${
+            brushMode
+              ? 'bg-[#2962ff] text-white border-[#2962ff]'
+              : 'text-[#b2b5be] bg-[#1e222d] border-[#2a2e39] hover:bg-[#2a2e39]'
+          }`}
+        >
+          {strings.brushMode}
+        </button>
+
         {/* 预警（M3 阶段 C） */}
         <button
           onClick={() => setAlertOpen((v) => !v)}
@@ -348,6 +385,9 @@ export default function Home() {
             onPaneChange={changePane}
             pineOverlays={pineOverlays}
             onPaneData={handlePaneData}
+            eventLines={eventLines}
+            brushMode={brushMode}
+            onBrushRange={handleBrushRange}
           />
         </main>
       </div>
@@ -361,6 +401,8 @@ export default function Home() {
           symbolLabel={activeSymbol.label}
           onOverlaysChange={setPineOverlays}
           onClose={() => setPineOpen(false)}
+          brushRange={brushRange}
+          onClearBrushRange={() => setBrushRange(null)}
         />
       )}
 

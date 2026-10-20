@@ -10,7 +10,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEventParams, UTCTimestamp } from 'lightweight-charts';
 import ChartPane from './ChartPane';
 import type { Candle } from '@/lib/data/types';
-import type { ChartHandles, PineOverlay, SyncedCrosshair } from './PriceChart';
+import type {
+  BrushRange,
+  ChartEventLine,
+  ChartHandles,
+  PineOverlay,
+  SyncedCrosshair,
+} from './PriceChart';
 import type { PaneCount, PaneState } from '@/lib/layout/types';
 import type { ToolType } from '@/lib/drawings/types';
 
@@ -26,6 +32,12 @@ export interface ChartGridProps {
   pineOverlays?: PineOverlay[];
   /** M3 阶段 B：窗格 K 线数据上报 */
   onPaneData?: (paneId: string, candles: Candle[]) => void;
+  /** 浮层优化：已触发预警的事件竖线（各窗格按品种过滤） */
+  eventLines?: (ChartEventLine & { symbolId: string })[];
+  /** 浮层优化：刷选回测模式（只作用于活动窗格） */
+  brushMode?: boolean;
+  /** 浮层优化：刷选区间变化回调 */
+  onBrushRange?: (range: BrushRange | null) => void;
 }
 
 const GRID_CLASS: Record<PaneCount, string> = {
@@ -45,6 +57,9 @@ export default function ChartGrid({
   onPaneChange,
   pineOverlays,
   onPaneData,
+  eventLines,
+  brushMode,
+  onBrushRange,
 }: ChartGridProps) {
   const handlesRef = useRef(new Map<string, ChartHandles>());
   const sourceRef = useRef<string | null>(null);
@@ -132,6 +147,9 @@ export default function ChartGrid({
           syncCrosshair={syncPositions[pane.id]}
           pineOverlays={pane.id === activePaneId ? pineOverlays : undefined}
           onData={onPaneData}
+          eventLines={eventLines}
+          brushEnabled={brushMode === true && pane.id === activePaneId}
+          onBrushRange={pane.id === activePaneId ? onBrushRange : undefined}
         />
       ))}
     </div>

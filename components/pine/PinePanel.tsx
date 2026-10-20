@@ -4,11 +4,11 @@
 // 代码输入 → PineTS 运行（v5/v6 粘贴即跑）→ 绘图输出叠加到活动窗格图表；
 // strategy 脚本额外展示回测汇总（收益/回撤/胜率/交易次数 + 收益曲线）。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UTCTimestamp } from 'lightweight-charts';
 import { PineTSEngine, pineSourceKey } from '@/lib/pine/pinets-engine';
 import type { PineBacktest, PinePlot } from '@/lib/pine/engine';
-import type { PineOverlay } from '@/components/chart/PriceChart';
+import type { BrushRange, PineOverlay } from '@/components/chart/PriceChart';
 import type { Candle } from '@/lib/data/types';
 import { strings } from '@/lib/i18n';
 
@@ -43,7 +43,20 @@ export interface PinePanelProps {
   symbolLabel: string;
   onOverlaysChange: (overlays: PineOverlay[]) => void;
   onClose: () => void;
+  /** 浮层优化：刷选回测区间（设置后运行/回测只用区间内 K 线） */
+  brushRange?: BrushRange | null;
+  onClearBrushRange?: () => void;
 }
+
+/** 区间端点显示：MM-DD HH:mm */
+const fmtRangeTime = (sec: number) =>
+  new Date(sec * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 
 function loadSource(symbolId: string): string {
   try {
@@ -76,6 +89,8 @@ export default function PinePanel({
   symbolLabel,
   onOverlaysChange,
   onClose,
+  brushRange,
+  onClearBrushRange,
 }: PinePanelProps) {
   const [source, setSource] = useState(() => loadSource(symbolId));
   const [running, setRunning] = useState(false);
@@ -97,6 +112,15 @@ export default function PinePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbolId]);
 
+  // 浮层优化：刷选区间内的 K 线（未设区间时为全部）
+  const rangedCandles = useMemo(
+    () =>
+      brushRange
+        ? candles.filter((c) => c.time >= brushRange.from && c.time <= brushRange.to)
+        : candles,
+    [candles, brushRange],
+  );
+
   const run = useCallback(async () => {
     if (running) return;
     setRunning(true);
@@ -108,7 +132,7 @@ export default function PinePanel({
         // 忽略持久化失败
       }
       const engine = new PineTSEngine();
-      const res = await engine.run(source, candles, { timeframe, symbolId });
+      const res = await engine.run(source, rangedCandles, { timeframe, symbolId });
       setErrors(res.errors);
       const rows: PlotRow[] = res.plots.map((p) => ({ ...p, visible: true }));
       setPlots(rows);
@@ -118,7 +142,7 @@ export default function PinePanel({
     } finally {
       setRunning(false);
     }
-  }, [running, source, candles, timeframe, symbolId]);
+  }, [running, source, rangedCandles, timeframe, symbolId]);
 
   const togglePlot = useCallback(
     (name: string) => {
@@ -150,6 +174,19 @@ export default function PinePanel({
         <span className="text-xs text-[#787b86]">
           {symbolLabel} {timeframe}
         </span>
+        {brushRange && (
+          <span className="flex items-center gap-1.5 h-6 pl-2 pr-1 rounded bg-[#2962ff]/15 border border-[#2962ff]/50 text-[11px] text-[#7aa2ff]">
+            {strings.brushRangeTag} {fmtRangeTime(brushRange.from)} ~ {fmtRangeTime(brushRange.to)} ·{' '}
+            {rangedCandles.length} {strings.brushBars}
+            <button
+              onClick={onClearBrushRange}
+              title={strings.brushClear}
+              className="w-5 h-5 flex items-center justify-center rounded text-[#7aa2ff] hover:bg-[#2962ff]/30"
+            >
+              ✕
+            </button>
+          </span>
+        )}
         <div className="flex-1" />
         <button
           onClick={() => setSource(SAMPLE_INDICATOR)}

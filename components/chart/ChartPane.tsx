@@ -3,9 +3,15 @@
 // 单个图表窗格（M3 阶段 A）：独立品种 + 周期 + 数据加载 + 画线（按窗格隔离）
 // 点击窗格任意位置将其设为活动窗格；画线工具只作用于活动窗格。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEventParams } from 'lightweight-charts';
-import PriceChart, { type ChartHandles, type PineOverlay, type SyncedCrosshair } from './PriceChart';
+import PriceChart, {
+  type BrushRange,
+  type ChartEventLine,
+  type ChartHandles,
+  type PineOverlay,
+  type SyncedCrosshair,
+} from './PriceChart';
 import SymbolSearch from './SymbolSearch';
 import { SYMBOLS, TIMEFRAMES, type SymbolInfo } from '@/lib/symbols';
 import type { PaneState } from '@/lib/layout/types';
@@ -29,6 +35,12 @@ export interface ChartPaneProps {
   pineOverlays?: PineOverlay[];
   /** M3 阶段 B：K 线数据就绪/更新时上报（供 Pine 面板使用） */
   onData?: (paneId: string, candles: Candle[]) => void;
+  /** 浮层优化：全部已触发预警的事件竖线（带 symbolId，本窗格按品种过滤） */
+  eventLines?: (ChartEventLine & { symbolId: string })[];
+  /** 浮层优化：刷选回测模式（仅活动窗格为 true） */
+  brushEnabled?: boolean;
+  /** 浮层优化：刷选区间变化回调 */
+  onBrushRange?: (range: BrushRange | null) => void;
 }
 
 export default function ChartPane({
@@ -43,6 +55,9 @@ export default function ChartPane({
   syncCrosshair,
   pineOverlays,
   onData,
+  eventLines,
+  brushEnabled,
+  onBrushRange,
 }: ChartPaneProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +109,15 @@ export default function ChartPane({
   const handleMove = useCallback(
     (p: MouseEventParams) => onCrosshairMove(pane.id, p),
     [pane.id, onCrosshairMove],
+  );
+
+  // 浮层优化：本窗格品种的事件竖线
+  const paneEventLines = useMemo(
+    () =>
+      (eventLines ?? [])
+        .filter((e) => e.symbolId === pane.symbolId)
+        .map(({ id, time, text }) => ({ id, time, text })),
+    [eventLines, pane.symbolId],
   );
 
   return (
@@ -163,6 +187,9 @@ export default function ChartPane({
           onCrosshairMove={handleMove}
           syncCrosshair={syncCrosshair}
           pineOverlays={pineOverlays}
+          eventLines={paneEventLines}
+          brushEnabled={brushEnabled}
+          onBrushRange={onBrushRange}
         />
       </div>
     </div>

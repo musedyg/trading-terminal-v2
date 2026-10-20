@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@tradingview/lwc-plugin-brushable-area-series": "^1.0.0",
+    "@tradingview/lwc-plugin-vertical-line": "^1.0.0",
+    "@tradingview/lwc-toolkit": "^1.0.0",
     "lightweight-charts": "^5.2.1",
     "next": "16.4.0",
     "pinets": "^0.11.0",

@@ -100,6 +100,13 @@ export const zh = {
   // M3 阶段 C：TP/SL/挂单线
   tradeLineAddHint: '添加',
   tradeLineDragHint: '拖拽移动线，双击删除',
+  // 浮层优化：事件竖线 + 刷选回测区间
+  alertEventLine: '预警触发',
+  brushMode: '回测区间',
+  brushHint: '开启后在活动图表上拖动刷选一段时间，Pine 运行/回测只用这段 K 线；开启期间图表滚动缩放暂停',
+  brushRangeTag: '回测区间',
+  brushBars: '根',
+  brushClear: '清除区间',
 } as const;
 
 export type Strings = typeof zh;
