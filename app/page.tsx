@@ -30,7 +30,7 @@ import {
   type PaneCount,
   type PaneState,
 } from '@/lib/layout/types';
-import { SYMBOLS } from '@/lib/symbols';
+import { SYMBOLS, resolveSymbol } from '@/lib/symbols';
 import type { Candle } from '@/lib/data/types';
 import { strings } from '@/lib/i18n';
 import type { ToolType } from '@/lib/drawings/types';
@@ -137,7 +137,7 @@ export default function Home() {
   );
 
   const activePane = panes.find((p) => p.id === activePaneId) ?? panes[0];
-  const activeSymbol = SYMBOLS.find((s) => s.id === activePane?.symbolId) ?? SYMBOLS[0];
+  const activeSymbol = (activePane ? resolveSymbol(activePane.symbolId) : undefined) ?? SYMBOLS[0];
 
   // M3 阶段 B：窗格数据上报（Pine 面板取活动窗格 K 线）
   const handlePaneData = useCallback((paneId: string, candles: Candle[]) => {

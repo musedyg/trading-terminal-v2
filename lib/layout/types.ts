@@ -1,5 +1,5 @@
 // 命名布局与分屏窗格模型（M3 阶段 A）：纯数据 + localStorage 读写，无 DOM
-import { SYMBOLS, TIMEFRAMES, type Timeframe } from '../symbols.ts';
+import { SYMBOLS, TIMEFRAMES, resolveSymbol, type Timeframe } from '../symbols.ts';
 
 export type PaneCount = 1 | 2 | 4 | 6;
 export const PANE_COUNTS: PaneCount[] = [1, 2, 4, 6];
@@ -33,7 +33,7 @@ function isTimeframe(v: unknown): v is Timeframe {
 }
 
 function validSymbolId(id: unknown): boolean {
-  return typeof id === 'string' && SYMBOLS.some((s) => s.id === id);
+  return typeof id === 'string' && resolveSymbol(id) !== undefined;
 }
 
 function isPaneCount(n: unknown): n is PaneCount {

@@ -4,6 +4,7 @@
 export const zh = {
   searchPlaceholder: '搜索品种',
   noMatch: '无匹配品种',
+  directQuery: '直接查询',
   loading: '加载中…',
   retry: '重试',
   indicators: '指标',

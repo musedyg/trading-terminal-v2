@@ -3,7 +3,7 @@
 // 品种搜索下拉（从 M1 page.tsx 抽出，供 M3 多窗格的每个窗格头复用）
 
 import { useEffect, useRef, useState } from 'react';
-import { SYMBOLS, type Market, type SymbolInfo } from '@/lib/symbols';
+import { SYMBOLS, normalizeSymbolInput, resolveSymbol, type Market, type SymbolInfo } from '@/lib/symbols';
 import { strings } from '@/lib/i18n';
 
 const MARKET_LABELS: Record<Market, string> = {
@@ -48,6 +48,12 @@ export default function SymbolSearch({ symbol, onPick, compact = false }: Symbol
   }, [dropdownOpen]);
 
   const groups = groupSymbols(query);
+  // 输代码直查：输入能解析成品种、且不在预设结果里时，给一行「直接查询」
+  const directId = dropdownOpen ? normalizeSymbolInput(query) : null;
+  const directInfo = directId ? resolveSymbol(directId) : undefined;
+  const directShown =
+    directInfo !== undefined &&
+    !MARKET_ORDER.some((m) => groups[m].some((s) => s.id === directInfo.id));
 
   return (
     <div ref={searchRef} className="relative shrink-0">
@@ -92,7 +98,20 @@ export default function SymbolSearch({ symbol, onPick, compact = false }: Symbol
               )}
             </div>
           ))}
-          {MARKET_ORDER.every((m) => groups[m].length === 0) && (
+          {directShown && directInfo && (
+            <button
+              onClick={() => {
+                onPick(directInfo);
+                setQuery('');
+                setDropdownOpen(false);
+              }}
+              className="w-full text-left px-3 py-2 text-sm text-[#26a69a] hover:bg-[#2a2e39] border-t border-[#2a2e39]"
+            >
+              {strings.directQuery} {directInfo.label}
+              <span className="ml-2 text-xs text-[#787b86]">{MARKET_LABELS[directInfo.market]}</span>
+            </button>
+          )}
+          {MARKET_ORDER.every((m) => groups[m].length === 0) && !directShown && (
             <div className="px-3 py-3 text-sm text-[#787b86]">{strings.noMatch}</div>
           )}
         </div>

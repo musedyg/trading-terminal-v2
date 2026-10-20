@@ -13,7 +13,7 @@ import PriceChart, {
   type SyncedCrosshair,
 } from './PriceChart';
 import SymbolSearch from './SymbolSearch';
-import { SYMBOLS, TIMEFRAMES, type SymbolInfo } from '@/lib/symbols';
+import { SYMBOLS, TIMEFRAMES, resolveSymbol, type SymbolInfo } from '@/lib/symbols';
 import type { PaneState } from '@/lib/layout/types';
 import type { ToolType } from '@/lib/drawings/types';
 import type { Candle } from '@/lib/data/types';
@@ -65,7 +65,7 @@ export default function ChartPane({
   const [sourceLabel, setSourceLabel] = useState('');
   const [failover, setFailover] = useState(false);
 
-  const symbol: SymbolInfo = SYMBOLS.find((s) => s.id === pane.symbolId) ?? SYMBOLS[0];
+  const symbol: SymbolInfo = resolveSymbol(pane.symbolId) ?? SYMBOLS[0];
   const precision = candles.length > 0 ? precisionForPrice(candles[candles.length - 1].close) : 4;
 
   const loadKlines = useCallback(async () => {

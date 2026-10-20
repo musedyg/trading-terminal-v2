@@ -174,6 +174,21 @@ export default function PriceChart({
       crosshair: { mode: CrosshairMode.Normal },
       timeScale: { borderColor: 'rgba(42,46,57,1)' },
       rightPriceScale: { borderColor: 'rgba(42,46,57,1)' },
+      // 交互显式全开（不依赖默认值）：桌面拖动平移/滚轮缩放 + 坐标轴按住拖动缩放/双击复位，
+      // 移动端触摸拖动 + 双指捏合缩放一并启用
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+      },
+      kineticScroll: { touch: true, mouse: true },
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -413,7 +428,7 @@ export default function PriceChart({
   }, [candles, precision]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full touch-none select-none">
       <div ref={containerRef} className="absolute inset-0" />
       {/* M2: drawings layer — 画线交互层（覆盖层，不拦截图表手势） */}
       {chartHandles && activeTool !== undefined && symbolId !== undefined && timeframe !== undefined && (

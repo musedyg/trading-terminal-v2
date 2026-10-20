@@ -5,7 +5,7 @@
 // 本 handler 读取了 req.nextUrl.searchParams（dynamic API），自动按请求动态渲染。
 
 import { NextRequest, NextResponse } from 'next/server';
-import { SOURCE_LABELS, SYMBOLS, TIMEFRAMES } from '@/lib/symbols';
+import { SOURCE_LABELS, TIMEFRAMES, resolveSymbol } from '@/lib/symbols';
 import { fetchKlinesWithFailover } from '@/lib/data';
 import type { Timeframe } from '@/lib/data/types';
 
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const symbolId = q.get('symbol') ?? '';
   const timeframe = q.get('timeframe') ?? '';
 
-  const symbol = SYMBOLS.find((s) => s.id === symbolId);
+  const symbol = resolveSymbol(symbolId);
   if (!symbol) {
     return NextResponse.json({ ok: false, error: `未知品种: ${symbolId || '（空）'}` }, { status: 400 });
   }
