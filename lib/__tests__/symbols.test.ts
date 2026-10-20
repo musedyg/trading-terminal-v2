@@ -46,6 +46,12 @@ test('动态美股：字母代码走 Yahoo，BRK.B 转 BRK-B', () => {
   assert.equal(brk?.feeds.yahoo, 'BRK-B');
 });
 
+test('动态品种解析结果引用稳定（同一 id 两次解析必须是同一对象）', () => {
+  // 回归：ChartPane 的加载回调依赖 symbol 身份，动态对象每次新建会造成请求死循环
+  assert.equal(resolveSymbol('PEPE/USD'), resolveSymbol('PEPE/USD'));
+  assert.equal(resolveSymbol('NFLX'), resolveSymbol('NFLX'));
+});
+
 test('识别不了的输入返回 undefined / null', () => {
   assert.equal(buildDynamicSymbol(''), undefined);
   assert.equal(buildDynamicSymbol('贵州茅台'), undefined);

@@ -192,9 +192,18 @@ export function buildDynamicSymbol(raw: string): SymbolInfo | undefined {
   return undefined;
 }
 
+/** 动态品种缓存：同一 id 永远返回同一对象引用（前端 effect 依赖对象身份，防重复请求死循环）。 */
+const dynamicCache = new Map<string, SymbolInfo>();
+
 /** 解析品种：先查预设表，未命中按代码规则动态构造（输代码直查的后端入口）。 */
 export function resolveSymbol(id: string): SymbolInfo | undefined {
-  return SYMBOLS.find((s) => s.id === id) ?? buildDynamicSymbol(id);
+  const preset = SYMBOLS.find((s) => s.id === id);
+  if (preset) return preset;
+  const cached = dynamicCache.get(id);
+  if (cached) return cached;
+  const built = buildDynamicSymbol(id);
+  if (built) dynamicCache.set(id, built);
+  return built;
 }
 
 /** 搜索框输入归一化：能解析成品种就返回其规范 id（预设 id 或动态 id），否则 null。 */

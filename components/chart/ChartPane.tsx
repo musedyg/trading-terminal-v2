@@ -87,7 +87,7 @@ export default function ChartPane({
     } finally {
       setLoading(false);
     }
-  }, [symbol, pane.timeframe]);
+  }, [symbol.id, pane.timeframe]);
 
   useEffect(() => {
     loadKlines();
