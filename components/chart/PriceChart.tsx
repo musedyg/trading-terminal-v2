@@ -25,6 +25,7 @@ import {
 import { paneContentElement } from '@tradingview/lwc-toolkit/dom/pane-element';
 import type { Candle } from '@/lib/data/types';
 import type { ToolType } from '@/lib/drawings/types';
+import { zoomPriceRange } from '@/lib/chart/price-axis-wheel';
 import DrawingsLayer from './DrawingsLayer';
 import TradeLinesLayer from './TradeLinesLayer';
 
@@ -131,6 +132,9 @@ export default function PriceChart({
   const eventPrimsRef = useRef(new Map<string, VerticalLine>());
   const brushCbRef = useRef(onBrushRange);
   brushCbRef.current = onBrushRange;
+  // 价格轴滚轮缩放：创建 effect 只跑一次，刷选状态经 ref 读最新值（开启时不接管滚轮）
+  const brushEnabledRef = useRef(brushEnabled);
+  brushEnabledRef.current = brushEnabled;
   // 浮层优化：品种标签 DOM —— 经 toolkit paneContentElement 挂进窗格画布容器，
   // 与画布共享坐标空间（替代原先外层 React 绝对定位 div，自己算位置易错位）
   const labelElRef = useRef<HTMLDivElement | null>(null);
@@ -232,11 +236,42 @@ export default function PriceChart({
     };
     chart.subscribeCrosshairMove(moveHandler);
 
+    // 价格轴滚轮缩放（LWC 默认不支持，自行接管）：捕获阶段监听容器，
+    // 仅当滚轮落在右侧价格轴条带且目标是画布时，以光标价格为中心缩放价格轴；
+    // 命中后 stopPropagation，避免 LWC 把同一次滚轮再当作时间轴缩放处理。
+    const onAxisWheel = (e: WheelEvent) => {
+      if (brushEnabledRef.current) return;
+      if (!(e.target instanceof HTMLCanvasElement)) return;
+      const rect = container.getBoundingClientRect();
+      const priceScale = chart.priceScale('right');
+      const axisWidth = priceScale.width();
+      if (axisWidth <= 0) return;
+      if (e.clientX - rect.left < rect.width - axisWidth) return;
+      const series = candleSeriesRef.current;
+      if (!series) return;
+      let range = priceScale.getVisibleRange();
+      if (!range) {
+        const top = series.coordinateToPrice(0);
+        const bottom = series.coordinateToPrice(rect.height);
+        if (top === null || bottom === null) return;
+        range = { from: Math.min(top, bottom), to: Math.max(top, bottom) };
+      }
+      const cursorPrice = series.coordinateToPrice(e.clientY - rect.top);
+      const center = cursorPrice ?? (range.from + range.to) / 2;
+      const next = zoomPriceRange(range, center, e.deltaY, e.deltaMode);
+      if (next === range) return;
+      e.preventDefault();
+      e.stopPropagation();
+      priceScale.setVisibleRange(next);
+    };
+    container.addEventListener('wheel', onAxisWheel, { passive: false, capture: true });
+
     // 浮层优化：尝试挂载品种标签（此刻窗格 DOM 可能还没生成，数据 effect 会重试）
     mountLabel();
 
     return () => {
       chart.unsubscribeCrosshairMove(moveHandler);
+      container.removeEventListener('wheel', onAxisWheel, { capture: true });
       resizeObserver.disconnect();
       labelElRef.current?.remove();
       labelElRef.current = null;
