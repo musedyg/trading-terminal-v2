@@ -131,9 +131,24 @@ export default function ChartGrid({
 
   const visible = panes.slice(0, paneCount);
 
+  // 分屏错峰挂载：窗格数增加时逐个放行（约 200ms 一个），避免多张图表在同一
+  // 瞬间并发创建 + 拉数据 + 渲染，把标签页进程峰值顶崩；减少窗格时立即生效。
+  // 网格模板尺寸由 GRID_CLASS 固定，未挂载的格子先空着，已挂载窗格不跳位。
+  const [revealed, setRevealed] = useState(visible.length);
+  useEffect(() => {
+    if (revealed > visible.length) {
+      setRevealed(visible.length);
+      return;
+    }
+    if (revealed === visible.length) return;
+    const t = window.setTimeout(() => setRevealed((r) => r + 1), 200);
+    return () => window.clearTimeout(t);
+  }, [revealed, visible.length]);
+  const shownPanes = visible.slice(0, revealed);
+
   return (
     <div className={`grid ${GRID_CLASS[paneCount]} gap-1 flex-1 min-h-0 p-1 bg-[#0e1016]`}>
-      {visible.map((pane) => (
+      {shownPanes.map((pane) => (
         <ChartPane
           key={pane.id}
           pane={pane}

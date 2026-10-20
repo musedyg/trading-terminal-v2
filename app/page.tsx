@@ -140,9 +140,16 @@ export default function Home() {
   const activeSymbol = (activePane ? resolveSymbol(activePane.symbolId) : undefined) ?? SYMBOLS[0];
 
   // M3 阶段 B：窗格数据上报（Pine 面板取活动窗格 K 线）
+  // 注意：只有活动窗格的数据被消费（Pine 面板 + 预警检查都只读活动窗格）。
+  // 非活动窗格只静静更新 ref —— 否则切分屏时 N 个新窗格同时上报会引发
+  // N 次整页重渲染，与 N 张图表的创建挤在同一瞬间，峰值能把标签页进程顶崩。
+  const activePaneIdRef = useRef(activePaneId);
+  activePaneIdRef.current = activePaneId;
   const handlePaneData = useCallback((paneId: string, candles: Candle[]) => {
     paneDataRef.current.set(paneId, candles);
-    setDataVersion((v) => v + 1);
+    if (paneId === activePaneIdRef.current) {
+      setDataVersion((v) => v + 1);
+    }
   }, []);
 
   // M3 阶段 B：活动窗格品种/周期变化时清空 Pine 叠加（避免旧图残留）
@@ -188,6 +195,7 @@ export default function Home() {
     const check = () => {
       const store = alertStoreRef.current;
       if (!store) return;
+      if (document.hidden) return; // 标签页在后台时不做检查，多标签并开时省资源
       const candles = paneDataRef.current.get(activePaneId);
       const last = candles && candles.length > 0 ? candles[candles.length - 1] : undefined;
       if (!last) return;
